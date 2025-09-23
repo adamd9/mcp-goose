@@ -1,0 +1,28 @@
+{
+  "name": "mcp-goose",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server wrapper around Goose CLI (headless) with scoped execution",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "prestart": "bash scripts/check-goose.sh",
+    "start": "node src/server.js",
+    "build": "echo 'No build needed for pure JS'",
+    "lint": "echo 'Lint step TBD'",
+    "test": "echo 'Tests TBD'",
+    "mcp:inspect": "npx @modelcontextprotocol/inspector --transport http --server-url http://localhost:3003/mcp --header \"Authorization: Bearer $AUTH_TOKEN\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "moment-timezone": "^0.5.45",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {}
+}
