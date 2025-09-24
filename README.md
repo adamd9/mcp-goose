@@ -182,7 +182,7 @@ Any MCP-compatible client/agent can connect and call the tools exposed by `mcp-g
 
 ## Supported tools (simple overview)
 - `goose_run`
-  - Start a new Goose job in headless mode. Typical use: run a recipe (e.g., `--recipe my-recipe.yaml`) or run instructions.
+  - Start a new Goose job in headless mode using a text prompt only. This tool always executes `goose run --no-session -t "<text>"`.
 
 - `goose_status`
   - Check if a job is queued, running, finished, failed, or canceled.
@@ -225,8 +225,8 @@ Any MCP-compatible client/agent can connect and call the tools exposed by `mcp-g
 
 
 ## Common examples
-- Run a headless recipe and monitor it
-  - Call `goose_run` with `command: "run"` and args like `--recipe automation.yaml --no-session`.
+- Run a text prompt headlessly and monitor
+  - Call `goose_run` with input: `{ "text": "create a simple website that is a love letter to gooses" }`.
   - Poll with `goose_status` while it runs.
   - Use `goose_stream_logs` to watch progress.
 
@@ -252,6 +252,10 @@ This sends MCP traffic to `POST http://localhost:3003/mcp` with the `Authorizati
 - Prefer recipes for repeatable automation. In headless mode, recipes should include a `prompt` field.
 - Set Goose environment variables to your preferences (provider, model, max turns) in your shell/profile before starting the server.
 - Avoid interactive flags; this server is designed for non-interactive, automated tasks.
+
+Console output:
+- Job stdout/stderr is echoed to the server console by default with prefixes like `[goose:<jobId>:stdout] ...`.
+- To disable console echoing, set `ECHO_JOB_LOGS=false` before `npm start`.
 
 
 ## Troubleshooting

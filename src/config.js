@@ -21,6 +21,7 @@ export const config = {
   gooseBinary: resolvedGoose,
   maxConcurrency: parseInt(process.env.MAX_CONCURRENCY || '1', 10),
   logMaxBytes: parseInt(process.env.LOG_MAX_BYTES || String(8_000_000), 10),
+  echoJobLogs: /^(1|true|yes)$/i.test(process.env.ECHO_JOB_LOGS || 'true'),
 };
 
 export function validateConfig() {

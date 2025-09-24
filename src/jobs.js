@@ -48,7 +48,7 @@ export function listJobs() {
   }));
 }
 
-export function startJob({ command, args, env, cwd, goosePath, logMaxBytes }) {
+export function startJob({ command, args, env, cwd, goosePath, logMaxBytes, echoToConsole = false }) {
   if (runningJobId) {
     const err = new Error('A job is already running. Concurrency is limited to 1.');
     err.code = 'BUSY';
@@ -83,14 +83,28 @@ export function startJob({ command, args, env, cwd, goosePath, logMaxBytes }) {
   jobs.set(id, job);
   runningJobId = id;
 
-  child.stdout.on('data', (d) => stdoutBuf.append(d));
-  child.stderr.on('data', (d) => stderrBuf.append(d));
+  child.stdout.on('data', (d) => {
+    stdoutBuf.append(d);
+    if (echoToConsole) {
+      try { process.stdout.write(`[goose:${id}:stdout] ${d}`); } catch (_) {}
+    }
+  });
+  child.stderr.on('data', (d) => {
+    stderrBuf.append(d);
+    if (echoToConsole) {
+      try { process.stderr.write(`[goose:${id}:stderr] ${d}`); } catch (_) {}
+    }
+  });
 
   child.on('exit', (code) => {
     job.exitCode = code;
     job.status = code === 0 ? 'completed' : 'failed';
     job.finishedAt = new Date().toISOString();
     runningJobId = null;
+    if (echoToConsole) {
+      const msg = `[goose:${id}] exited with code ${code}\n`;
+      try { process.stdout.write(msg); } catch (_) {}
+    }
   });
 
   child.on('error', (e) => {

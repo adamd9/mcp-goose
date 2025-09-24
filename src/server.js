@@ -156,23 +156,17 @@ server.registerTool(
   'goose_run',
   {
     title: 'Run Goose Command',
-    description: "Start a Goose 'run' job (headless). Enforces a flag allowlist and single concurrency.",
+    description: "Start a Goose 'run' job with a text prompt (headless). Always runs '--no-session -t <text>'.",
     inputSchema: {
-      args: z.array(z.string()).optional().describe('Additional allowed flags and values'),
-      params: z.record(z.string()).optional().describe('Recipe params as key/value pairs'),
-      text: z.string().optional().describe('Convenience: text prompt for goose run (-t TEXT)'),
-      env: z.record(z.string()).optional().describe('Additional environment variables to pass through')
+      text: z.string().min(1).describe('Natural language instruction to pass to goose run (-t)')
     }
   },
-  async ({ args = [], params = {}, text, env = {} }) => {
+  async ({ text }) => {
     const normalized = 'run';
     ensureAllowedCommand(normalized);
 
-    // Build final args safely for 'run'
-    let finalArgs = buildRunArgs({ args, params });
-    if (text && text.length > 0) {
-      finalArgs.push('-t', text);
-    }
+    // Build final args: always headless and text-based
+    const finalArgs = sanitizeArgs(['--no-session', '-t', text]);
 
     // Enforce single concurrency
     if (getRunningJobId()) {
@@ -184,10 +178,11 @@ server.registerTool(
     const { jobId, pid, startedAt } = startJob({
       command: normalized,
       args: finalArgs,
-      env,
+      env: {},
       cwd: config.scopeDir,
       goosePath: config.gooseBinary,
-      logMaxBytes: config.logMaxBytes
+      logMaxBytes: config.logMaxBytes,
+      echoToConsole: config.echoJobLogs
     });
 
     return { content: [{ type: 'text', text: JSON.stringify({ jobId, pid, startedAt }, null, 2) }] };
@@ -210,7 +205,8 @@ server.registerTool(
       env: {},
       cwd: config.scopeDir,
       goosePath: config.gooseBinary,
-      logMaxBytes: config.logMaxBytes
+      logMaxBytes: config.logMaxBytes,
+      echoToConsole: config.echoJobLogs
     });
     return { content: [{ type: 'text', text: JSON.stringify({ jobId, pid, startedAt }, null, 2) }] };
   }
@@ -231,7 +227,8 @@ server.registerTool(
       env: {},
       cwd: config.scopeDir,
       goosePath: config.gooseBinary,
-      logMaxBytes: config.logMaxBytes
+      logMaxBytes: config.logMaxBytes,
+      echoToConsole: config.echoJobLogs
     });
     return { content: [{ type: 'text', text: JSON.stringify({ jobId, pid, startedAt }, null, 2) }] };
   }
@@ -260,7 +257,8 @@ server.registerTool(
       env: {},
       cwd: config.scopeDir,
       goosePath: config.gooseBinary,
-      logMaxBytes: config.logMaxBytes
+      logMaxBytes: config.logMaxBytes,
+      echoToConsole: config.echoJobLogs
     });
     return { content: [{ type: 'text', text: JSON.stringify({ jobId, pid, startedAt }, null, 2) }] };
   }
