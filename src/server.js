@@ -11,6 +11,108 @@ import { startJob, jobStatus, streamLogs, getOutput, stopJob, getRunningJobId } 
 
 dotenv.config();
 
+// Instantiate MCP server BEFORE registering any tools
+const server = new McpServer({ name: 'mcp-goose', version: '0.1.0' });
+
+// Tool: goose_session_start
+server.registerTool(
+  'goose_session_start',
+  {
+    title: 'Session Start',
+    description: 'Start an interactive Goose session (CLI)',
+    inputSchema: {
+      name: z.string().optional().describe('Optional session name (-n, --name)')
+    }
+  },
+  async ({ name }) => {
+    const args = ['session', '--with-builtin', 'developer'];
+    if (name) args.push('--name', name);
+    if (getRunningJobId()) {
+      const err = new Error('A job is already running. Concurrency is limited to 1.');
+      err.code = 'BUSY';
+      throw err;
+    }
+    const { jobId, pid, startedAt } = startJob({
+      command: args.shift(),
+      args: sanitizeArgs(args),
+      env: {},
+      cwd: config.scopeDir,
+      goosePath: config.gooseBinary,
+      logMaxBytes: config.logMaxBytes,
+      echoToConsole: config.echoJobLogs
+    });
+    return { content: [{ type: 'text', text: JSON.stringify({ jobId, pid, startedAt }, null, 2) }] };
+  }
+);
+
+// Tool: goose_session_resume
+server.registerTool(
+  'goose_session_resume',
+  {
+    title: 'Session Resume',
+    description: 'Resume an existing Goose session (CLI)',
+    inputSchema: {
+      name: z.string().optional().describe('Resume by name (-n, --name)'),
+      id: z.string().optional().describe('Resume by id (-i, --id)')
+    }
+  },
+  async ({ name, id }) => {
+    const args = ['session', '--resume', '--with-builtin', 'developer'];
+    if (name) args.push('--name', name);
+    if (id) args.push('--id', id);
+    if (getRunningJobId()) {
+      const err = new Error('A job is already running. Concurrency is limited to 1.');
+      err.code = 'BUSY';
+      throw err;
+    }
+    const { jobId, pid, startedAt } = startJob({
+      command: args.shift(),
+      args: sanitizeArgs(args),
+      env: {},
+      cwd: config.scopeDir,
+      goosePath: config.gooseBinary,
+      logMaxBytes: config.logMaxBytes,
+      echoToConsole: config.echoJobLogs
+    });
+    return { content: [{ type: 'text', text: JSON.stringify({ jobId, pid, startedAt }, null, 2) }] };
+  }
+);
+
+// Tool: goose_session_remove
+server.registerTool(
+  'goose_session_remove',
+  {
+    title: 'Session Remove',
+    description: 'Remove one or more saved sessions (irreversible)',
+    inputSchema: {
+      id: z.string().optional().describe('Remove by id (-i, --id)'),
+      name: z.string().optional().describe('Remove by name (-n, --name)'),
+      regex: z.string().optional().describe('Regex pattern (-r, --regex)')
+    }
+  },
+  async ({ id, name, regex }) => {
+    const args = ['session', 'remove'];
+    if (id) args.push('--id', id);
+    if (name) args.push('--name', name);
+    if (regex) args.push('--regex', regex);
+    if (getRunningJobId()) {
+      const err = new Error('A job is already running. Concurrency is limited to 1.');
+      err.code = 'BUSY';
+      throw err;
+    }
+    const { jobId, pid, startedAt } = startJob({
+      command: args.shift(),
+      args: sanitizeArgs(args),
+      env: {},
+      cwd: config.scopeDir,
+      goosePath: config.gooseBinary,
+      logMaxBytes: config.logMaxBytes,
+      echoToConsole: config.echoJobLogs
+    });
+    return { content: [{ type: 'text', text: JSON.stringify({ jobId, pid, startedAt }, null, 2) }] };
+  }
+);
+
 // Validate config at startup
 const configErrors = validateConfig();
 if (configErrors.length) {
@@ -86,9 +188,6 @@ function buildRunArgs({ args = [], params = {} }) {
 function ensureAllowedCommand(command) {
   if (!ALLOWED_COMMANDS.has(command)) throw new Error(`command not allowed: ${command}`);
 }
-
-// MCP server
-const server = new McpServer({ name: 'mcp-goose', version: '0.1.0' });
 
 // Tool: health_check
 server.registerTool(
@@ -166,7 +265,7 @@ server.registerTool(
     ensureAllowedCommand(normalized);
 
     // Build final args: always headless and text-based
-    const finalArgs = sanitizeArgs(['--no-session', '-t', text]);
+    const finalArgs = sanitizeArgs(['--no-session', '--with-builtin', 'developer', '-t', text]);
 
     // Enforce single concurrency
     if (getRunningJobId()) {

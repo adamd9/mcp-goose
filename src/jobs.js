@@ -77,7 +77,8 @@ export function startJob({ command, args, env, cwd, goosePath, logMaxBytes, echo
     exitCode: null,
     stdout: stdoutBuf,
     stderr: stderrBuf,
-    child
+    child,
+    _echo: { stdoutAtLineStart: true, stderrAtLineStart: true }
   };
 
   jobs.set(id, job);
@@ -86,13 +87,52 @@ export function startJob({ command, args, env, cwd, goosePath, logMaxBytes, echo
   child.stdout.on('data', (d) => {
     stdoutBuf.append(d);
     if (echoToConsole) {
-      try { process.stdout.write(`[goose:${id}:stdout] ${d}`); } catch (_) {}
+      try {
+        const text = d.toString();
+        const parts = text.split('\n');
+        for (let i = 0; i < parts.length; i++) {
+          const segment = parts[i];
+          // Only write prefix at the start of a new line
+          if (job._echo.stdoutAtLineStart) {
+            process.stdout.write(`[goose:${id}:stdout] `);
+          }
+          if (segment.length > 0) {
+            process.stdout.write(segment);
+          }
+          if (i < parts.length - 1) {
+            // There was a newline after this segment
+            process.stdout.write('\n');
+            job._echo.stdoutAtLineStart = true;
+          } else {
+            // Last segment: if it ended without a newline, we're mid-line
+            job._echo.stdoutAtLineStart = false;
+          }
+        }
+      } catch (_) {}
     }
   });
   child.stderr.on('data', (d) => {
     stderrBuf.append(d);
     if (echoToConsole) {
-      try { process.stderr.write(`[goose:${id}:stderr] ${d}`); } catch (_) {}
+      try {
+        const text = d.toString();
+        const parts = text.split('\n');
+        for (let i = 0; i < parts.length; i++) {
+          const segment = parts[i];
+          if (job._echo.stderrAtLineStart) {
+            process.stderr.write(`[goose:${id}:stderr] `);
+          }
+          if (segment.length > 0) {
+            process.stderr.write(segment);
+          }
+          if (i < parts.length - 1) {
+            process.stderr.write('\n');
+            job._echo.stderrAtLineStart = true;
+          } else {
+            job._echo.stderrAtLineStart = false;
+          }
+        }
+      } catch (_) {}
     }
   });
 
@@ -103,7 +143,11 @@ export function startJob({ command, args, env, cwd, goosePath, logMaxBytes, echo
     runningJobId = null;
     if (echoToConsole) {
       const msg = `[goose:${id}] exited with code ${code}\n`;
-      try { process.stdout.write(msg); } catch (_) {}
+      try {
+        // Ensure we end the current line before writing the exit message
+        if (!job._echo.stdoutAtLineStart) process.stdout.write('\n');
+        process.stdout.write(msg);
+      } catch (_) {}
     }
   });
 
