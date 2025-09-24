@@ -156,31 +156,22 @@ server.registerTool(
   'goose_run',
   {
     title: 'Run Goose Command',
-    description: 'Start a Goose job (headless). Enforces a command/flag allowlist and single concurrency.',
+    description: "Start a Goose 'run' job (headless). Enforces a flag allowlist and single concurrency.",
     inputSchema: {
-      command: z.enum(['run', 'recipe', 'info', 'version', 'help']).describe('Goose command to execute'),
-      subcommand: z.string().optional().describe('For recipe: validate | deeplink'),
       args: z.array(z.string()).optional().describe('Additional allowed flags and values'),
       params: z.record(z.string()).optional().describe('Recipe params as key/value pairs'),
+      text: z.string().optional().describe('Convenience: text prompt for goose run (-t TEXT)'),
       env: z.record(z.string()).optional().describe('Additional environment variables to pass through')
     }
   },
-  async ({ command, subcommand, args = [], params = {}, env = {} }) => {
-    ensureAllowedCommand(command);
+  async ({ args = [], params = {}, text, env = {} }) => {
+    const normalized = 'run';
+    ensureAllowedCommand(normalized);
 
-    // Build final args safely
-    let finalArgs = [];
-    if (command === 'run') {
-      finalArgs = buildRunArgs({ args, params });
-    } else if (command === 'recipe') {
-      // Only allow explicit subcommands validate or deeplink
-      if (!subcommand || !['validate', 'deeplink'].includes(subcommand)) {
-        throw new Error('recipe requires subcommand: validate | deeplink');
-      }
-      finalArgs = sanitizeArgs([subcommand, ...args]);
-    } else {
-      // info/version/help
-      finalArgs = sanitizeArgs(args);
+    // Build final args safely for 'run'
+    let finalArgs = buildRunArgs({ args, params });
+    if (text && text.length > 0) {
+      finalArgs.push('-t', text);
     }
 
     // Enforce single concurrency
@@ -191,7 +182,7 @@ server.registerTool(
     }
 
     const { jobId, pid, startedAt } = startJob({
-      command,
+      command: normalized,
       args: finalArgs,
       env,
       cwd: config.scopeDir,
