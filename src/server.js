@@ -6,6 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import path from 'node:path';
+import os from 'node:os';
 
 import { config, validateConfig } from './config.js';
 import { startJob, jobStatus, streamLogs, getOutput, stopJob, getRunningJobId } from './jobs.js';
@@ -267,8 +268,9 @@ server.registerTool(
     const normalized = 'run';
     ensureAllowedCommand(normalized);
 
-    // Create a runtime recipe using local template if available
-    const runtimeDir = path.join(config.scopeDir, '.mcp-goose', 'runtime-recipes');
+    // Create a runtime recipe (outside of scopeDir) that embeds the instruction and operational guardrails
+    const { homedir } = await import('node:os');
+    const runtimeDir = path.join(homedir(), '.cache', 'mcp-goose', 'runtime-recipes');
     try { fs.mkdirSync(runtimeDir, { recursive: true }); } catch {}
     const recipePath = path.join(runtimeDir, `run-${Date.now()}.yaml`);
     const templatePath = path.resolve(process.cwd(), 'recipes', 'headless-run.yaml');
