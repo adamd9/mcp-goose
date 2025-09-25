@@ -258,6 +258,32 @@ Console output:
 - To disable console echoing, set `ECHO_JOB_LOGS=false` before `npm start`.
 
 
+## Branch previews (local static hosting)
+
+This server can publish static content from your `GOOSE_SCOPE_DIR` and serve it locally:
+
+- Root site (main branch): `http://localhost:3003/`
+- Preview sites (feature branches): `http://localhost:3003/.preview/<branch-slug>/`
+
+Behavior:
+
+- On startup, the server publishes the currently checked-out branch. If it is `main`, the root site updates; otherwise only the matching preview path updates.
+- On every commit (or branch switch), the current branch is republished.
+- The root (`/`) always serves the last published content for `main`. Previews live under `/.preview/`.
+
+Notes:
+
+- Only committed changes are published. Uncommitted working directory changes are not published by design.
+- Branch names are converted to filesystem-safe slugs (e.g., `feature/some-thing` → `feature_some-thing`).
+
+Troubleshooting preview updates:
+
+- If a commit on `main` didn’t trigger a publish, your repository may be using Git packed refs. Earlier versions only watched `HEAD` and `refs/heads/<branch>`; commits that update `.git/packed-refs` would not fire file watcher events. This has been hardened to also watch `packed-refs` and to poll `git rev-parse HEAD` every 2 seconds. After updating, restart the server.
+- Some platforms/filesystems can drop or coalesce watch events. The polling fallback should still detect new commits (it compares the `HEAD` hash).
+- Ensure `GOOSE_SCOPE_DIR` points to the repository root. If you’re committing in a submodule or a different folder, the watcher won’t see it.
+- On first run while on a non-`main` branch, the root may be empty until you publish `main` at least once.
+
+
 ## Troubleshooting
 - Authentication errors: make sure your client sends `Authorization: Bearer <AUTH_TOKEN>`.
 - "Command not allowed": the server blocks commands/flags not on its internal allowlist.

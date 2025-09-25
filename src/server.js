@@ -5,9 +5,12 @@ import moment from 'moment-timezone';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import path from 'node:path';
 
 import { config, validateConfig } from './config.js';
 import { startJob, jobStatus, streamLogs, getOutput, stopJob, getRunningJobId } from './jobs.js';
+import fs from 'node:fs';
+import { publishCurrentBranch, initGitWatcher, resolvePreviewRoot } from './publish.js';
 
 dotenv.config();
 
@@ -264,8 +267,16 @@ server.registerTool(
     const normalized = 'run';
     ensureAllowedCommand(normalized);
 
-    // Build final args: always headless and text-based
-    const finalArgs = sanitizeArgs(['--no-session', '--with-builtin', 'developer', '-t', text]);
+    // Create a runtime recipe that embeds the instruction and operational guardrails
+    const runtimeDir = path.join(config.scopeDir, '.mcp-goose', 'runtime-recipes');
+    try { fs.mkdirSync(runtimeDir, { recursive: true }); } catch {}
+    const recipePath = path.join(runtimeDir, `run-${Date.now()}.yaml`);
+    const prompt = `You are Goose running in headless mode. Follow the user instruction faithfully.\n\nUser instruction:\n${text}\n\nOperational requirements (perform automatically unless unsafe):\n- If the current directory is not a git repository, initialize one (git init).\n- Create and switch to a new feature branch uniquely named for this run (e.g., 'feat/mcp-run-<timestamp>').\n- Make all code changes on that branch.\n- At the end of the run, add all relevant files and commit with a concise message summarizing changes.\n- Do not push to any remote.\n- If actions would be destructive, explain and skip those actions.\n`;
+    const recipeYaml = `title: MCP Headless Run\ndescription: Headless run with git init/branch/commit workflow\nprompt: |\n  ${prompt.split('\n').join('\n  ')}\n`;
+    fs.writeFileSync(recipePath, recipeYaml, 'utf8');
+
+    // Build final args: always headless recipe with developer builtin
+    const finalArgs = sanitizeArgs(['--no-session', '--with-builtin', 'developer', '--recipe', recipePath]);
 
     // Enforce single concurrency
     if (getRunningJobId()) {
@@ -456,9 +467,46 @@ app.post('/mcp', async (req, res) => {
   }
 });
 
+// Static hosting for published sites (main at '/', previews at '/.preview/<branch>/')
+const PREVIEW_ROOT = resolvePreviewRoot();
+app.use('/.preview', express.static(path.join(PREVIEW_ROOT, '.preview')));
+app.use('/', express.static(PREVIEW_ROOT));
+
 // Start HTTP server
 const PORT = config.port || 3003;
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[mcp-goose] listening on http://0.0.0.0:${PORT}`);
   console.log(`[mcp-goose] MCP endpoint: POST http://localhost:${PORT}/mcp`);
+
+  // Initial publish of current branch to local static root
+  try {
+    const result = await publishCurrentBranch(config.scopeDir);
+    console.log(`[preview] published branch '${result.branch}' → ${result.targetDir}`);
+    console.log(`[preview] URL: ${result.url}`);
+  } catch (e) {
+    console.warn(`[preview] initial publish failed: ${e?.message || e}`);
+  }
+
+  // Watch for git HEAD/branch changes and republish
+  let republishTimer = null;
+  const debounce = (fn, ms) => {
+    return () => {
+      if (republishTimer) clearTimeout(republishTimer);
+      republishTimer = setTimeout(fn, ms);
+    };
+  };
+  const onGitChange = debounce(async () => {
+    try {
+      const result = await publishCurrentBranch(config.scopeDir);
+      console.log(`[preview] republished '${result.branch}' → ${result.targetDir}`);
+    } catch (e) {
+      console.warn(`[preview] republish failed: ${e?.message || e}`);
+    }
+  }, 500);
+  try {
+    initGitWatcher(config.scopeDir, onGitChange);
+    console.log('[preview] git watcher active');
+  } catch (e) {
+    console.warn(`[preview] git watcher failed: ${e?.message || e}`);
+  }
 });
