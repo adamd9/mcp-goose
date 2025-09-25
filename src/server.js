@@ -267,12 +267,24 @@ server.registerTool(
     const normalized = 'run';
     ensureAllowedCommand(normalized);
 
-    // Create a runtime recipe that embeds the instruction and operational guardrails
+    // Create a runtime recipe using local template if available
     const runtimeDir = path.join(config.scopeDir, '.mcp-goose', 'runtime-recipes');
     try { fs.mkdirSync(runtimeDir, { recursive: true }); } catch {}
     const recipePath = path.join(runtimeDir, `run-${Date.now()}.yaml`);
-    const prompt = `You are Goose running in headless mode. Follow the user instruction faithfully.\n\nUser instruction:\n${text}\n\nOperational requirements (perform automatically unless unsafe):\n- If the current directory is not a git repository, initialize one (git init).\n- Create and switch to a new feature branch uniquely named for this run (e.g., 'feat/mcp-run-<timestamp>').\n- Make all code changes on that branch.\n- At the end of the run, add all relevant files and commit with a concise message summarizing changes.\n- Do not push to any remote.\n- If actions would be destructive, explain and skip those actions.\n`;
-    const recipeYaml = `title: MCP Headless Run\ndescription: Headless run with git init/branch/commit workflow\nprompt: |\n  ${prompt.split('\n').join('\n  ')}\n`;
+    const templatePath = path.resolve(process.cwd(), 'recipes', 'headless-run.yaml');
+    let recipeYaml;
+    try {
+      if (fs.existsSync(templatePath)) {
+        const tpl = fs.readFileSync(templatePath, 'utf8');
+        recipeYaml = tpl.replace('<<<INSTRUCTION>>>', text);
+      } else {
+        // Fallback: synthesize a minimal recipe if template missing
+        const prompt = `You are Goose running in headless mode. Follow the user instruction faithfully.\n\nUser instruction:\n${text}\n\nOperational requirements (perform automatically unless unsafe):\n- If the current directory is not a git repository, initialize one (git init).\n- Create and switch to a new feature branch uniquely named for this run (e.g., 'feat/mcp-run-<timestamp>').\n- Make all code changes on that branch.\n- At the end of the run, add all relevant files and commit with a concise message summarizing changes.\n- Do not push to any remote.\n- If actions would be destructive, explain and skip those actions.\n`;
+        recipeYaml = `title: MCP Headless Run\ndescription: Headless run with git init/branch/commit workflow\nprompt: |\n  ${prompt.split('\n').join('\n  ')}\n`;
+      }
+    } catch (e) {
+      throw new Error(`failed to prepare runtime recipe: ${e?.message || e}`);
+    }
     fs.writeFileSync(recipePath, recipeYaml, 'utf8');
 
     // Build final args: always headless recipe with developer builtin
@@ -467,8 +479,127 @@ app.post('/mcp', async (req, res) => {
   }
 });
 
-// Static hosting for published sites (main at '/', previews at '/.preview/<branch>/')
+// SSE event stream for live-reload on publish
+const sseClients = new Set();
+app.get('/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+  res.write(': connected\n\n');
+  sseClients.add(res);
+  req.on('close', () => {
+    sseClients.delete(res);
+    try { res.end(); } catch (_) {}
+  });
+});
+
+function broadcastReload(info = {}) {
+  const payload = JSON.stringify({ at: Date.now(), ...info });
+  for (const res of sseClients) {
+    try { res.write('event: reload\n'); res.write(`data: ${payload}\n\n`); } catch (_) {}
+  }
+}
+
+// Helper: list preview branches from filesystem
 const PREVIEW_ROOT = resolvePreviewRoot();
+function listPreviewBranches() {
+  const out = [];
+  // main branch entry
+  out.push({ name: 'main', url: '/' });
+  try {
+    const dir = path.join(PREVIEW_ROOT, '.preview');
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const ent of entries) {
+      if (ent.isDirectory()) {
+        out.push({ name: ent.name, url: `/.preview/${ent.name}/` });
+      }
+    }
+  } catch (_) {}
+  return out;
+}
+
+// HTML injection middleware: inject floating branch switcher and SSE client
+function needsInjection(filePath) {
+  if (!filePath) return false;
+  const lower = filePath.toLowerCase();
+  return lower.endsWith('.html') || lower.endsWith('.htm');
+}
+
+function buildInjected(html, currentPath = '/') {
+  const branches = listPreviewBranches();
+  const nav = `
+  <style>
+    ._goose_preview_nav{position:fixed;right:16px;bottom:16px;z-index:99999;font:14px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+    ._goose_preview_nav .box{background:#111d28;color:#dfe9f1;border:1px solid #2a3b4a;border-radius:10px;padding:10px 12px;box-shadow:0 6px 18px rgba(0,0,0,0.25)}
+    ._goose_preview_nav .title{font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase;opacity:.8;margin-bottom:6px}
+    ._goose_preview_nav a{display:block;color:#bde0fe;text-decoration:none;padding:6px 4px;border-radius:6px}
+    ._goose_preview_nav a:hover{background:#18324a}
+    ._goose_preview_nav .active{color:#fff;background:#29557a}
+    ._goose_preview_nav .hint{margin-top:8px;font-size:12px;color:#e8f7ff;opacity:0;transition:opacity .25s}
+  </style>
+  <div class="_goose_preview_nav"><div class="box">
+    <div class="title">Preview Branches</div>
+    ${branches.map(b => `<a href="${b.url}" class="${currentPath.startsWith(b.url) ? 'active' : ''}">${b.name}</a>`).join('')}
+    <div class="hint" id="_goose_preview_hint"></div>
+  </div></div>
+  <script>
+    (function(){
+      function showHint(msg){
+        var el=document.getElementById('_goose_preview_hint');
+        if(!el) return; el.textContent=msg; el.style.opacity='1';
+        try{clearTimeout(window._goose_hint_t);}catch(_){}}
+      try{
+        var es=new EventSource('/events');
+        es.addEventListener('reload',function(ev){
+          var data={}; try{ data = JSON.parse(ev.data||'{}'); }catch(_){ }
+          showHint('Updated ' + (data.branch || 'site') + ' — reloading…');
+          setTimeout(function(){ location.reload(); }, 650);
+        });
+      }catch(_){ }
+    })();
+  </script>`;
+  if (html.includes('</body>')) {
+    return html.replace('</body>', nav + '\n</body>');
+  }
+  return html + nav;
+}
+
+function tryServeInjected(baseDir) {
+  return (req, res, next) => {
+    if (req.method !== 'GET') return next();
+    // Map URL path to filesystem under baseDir
+    let rel = decodeURIComponent(req.path);
+    if (rel.endsWith('/')) rel += 'index.html';
+    const filePath = path.join(baseDir, rel);
+    // Prevent path traversal
+    if (!filePath.startsWith(baseDir)) return res.status(403).end();
+    try {
+      const st = fs.statSync(filePath);
+      if (st.isDirectory()) {
+        const indexPath = path.join(filePath, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          const html = fs.readFileSync(indexPath, 'utf8');
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          return res.send(buildInjected(html, req.path.endsWith('/') ? req.path : req.path + '/'));
+        }
+        return next();
+      }
+      if (needsInjection(filePath)) {
+        const html = fs.readFileSync(filePath, 'utf8');
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        return res.send(buildInjected(html, req.path));
+      }
+      return next();
+    } catch (_) {
+      return next();
+    }
+  };
+}
+
+// Static hosting for published sites (main at '/', previews at '/.preview/<branch>/')
+app.use('/.preview', tryServeInjected(path.join(PREVIEW_ROOT)));
+app.use('/', tryServeInjected(PREVIEW_ROOT));
 app.use('/.preview', express.static(path.join(PREVIEW_ROOT, '.preview')));
 app.use('/', express.static(PREVIEW_ROOT));
 
@@ -483,6 +614,7 @@ app.listen(PORT, '0.0.0.0', async () => {
     const result = await publishCurrentBranch(config.scopeDir);
     console.log(`[preview] published branch '${result.branch}' → ${result.targetDir}`);
     console.log(`[preview] URL: ${result.url}`);
+    broadcastReload({ branch: result.branch });
   } catch (e) {
     console.warn(`[preview] initial publish failed: ${e?.message || e}`);
   }
@@ -499,6 +631,7 @@ app.listen(PORT, '0.0.0.0', async () => {
     try {
       const result = await publishCurrentBranch(config.scopeDir);
       console.log(`[preview] republished '${result.branch}' → ${result.targetDir}`);
+      broadcastReload({ branch: result.branch });
     } catch (e) {
       console.warn(`[preview] republish failed: ${e?.message || e}`);
     }
