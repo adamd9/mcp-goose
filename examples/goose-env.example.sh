@@ -6,8 +6,15 @@
 # --- Authentication for mcp-goose ---
 export AUTH_TOKEN="replace-with-a-strong-secret"
 
-# --- Scope directory (absolute path to your project) ---
-export GOOSE_SCOPE_DIR="/abs/path/to/your/project"
+# --- Project selection ---
+# Preferred: set PROJECT_NAME and mcp-goose will use a subdirectory under this repo:
+#   <repo-root>/projects/$PROJECT_NAME
+# That directory will be auto-created and "git init" will be run on first start.
+export PROJECT_NAME="my-website"
+
+# Optional override: provide an absolute scope directory instead of PROJECT_NAME.
+# If set, this takes precedence and must be an absolute path.
+# export GOOSE_SCOPE_DIR="/abs/path/to/your/project"
 
 # --- Optional: explicit goose binary path ---
 # export GOOSE_BINARY="/usr/local/bin/goose"
