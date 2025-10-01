@@ -1,3 +1,5 @@
 .goose-env.sh
 node_modules
 projects/
+docker-compose.yml
+.env

@@ -1,0 +1,21 @@
+services:
+  mcp-goose:
+    image: node:latest
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "apk add --no-cache bash curl git && [ ! -d /app/mcp-goose ] && echo 'Starting NEW deployment' && git clone https://github.com/adamd9/mcp-goose.git && cd mcp-goose && npm install && npm start || echo 'Starting existing deployment in 5 seconds' && sleep 5 && cd /app/mcp-goose && git pull && npm install && npm start"
+    ports:
+      - "3003:80"
+    volumes:
+      # Persist all projects (created under /app/mcp-goose/projects/<PROJECT_NAME>)
+      - ./data/projects:/app/mcp-goose/projects
+      # Persist Goose sessions and logs
+      - ./data/goose-sessions:/root/.local/share/goose
+      - ./data/goose-logs:/root/.local/state/goose
+      # Persist preview cache so published branches survive restarts
+      - ./data/preview-cache:/root/.cache/mcp-goose
+    env_file:
+      - .env
+    environment:
+      # Override or add additional environment variables here
+      PORT: "80"

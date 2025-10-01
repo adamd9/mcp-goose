@@ -113,8 +113,12 @@ Set the following environment variables before starting the server:
 - `AUTH_TOKEN` (required)
   The bearer token clients must send in the `Authorization` header.
 
-- `GOOSE_SCOPE_DIR` (required)
-  Absolute path to the project directory Goose should operate on.
+- **Project directory (choose one):**
+  - `PROJECT_NAME` (recommended): Simple project name (e.g., `my-website`). The server will create and manage a directory at `<projects-base>/<PROJECT_NAME>/` and auto-initialize it as a git repo.
+  - `GOOSE_SCOPE_DIR`: Absolute path to an existing project directory. Use this when you need full control or want to point at an existing project outside the managed projects directory.
+
+- `GOOSE_PROJECTS_DIR` (optional)
+  Base directory where projects are created when using `PROJECT_NAME`. Defaults to `<repo-root>/projects`. Useful for Docker deployments where you want projects at `/projects` or another absolute path.
 
 - `GOOSE_BINARY` (optional)
   Absolute path to the `goose` executable. Defaults to `goose` on your PATH.
@@ -125,11 +129,18 @@ Set the following environment variables before starting the server:
 - `LOG_MAX_BYTES` (optional)
   Maximum bytes of log data kept per job (default: 8,000,000 ~ 8 MB).
 
-Example:
+Example with `PROJECT_NAME` (recommended for most users):
+```bash
+export AUTH_TOKEN="your-secret"
+export PROJECT_NAME="my-website"
+export MAX_CONCURRENCY="1"
+export LOG_MAX_BYTES="8000000"
+```
+
+Example with `GOOSE_SCOPE_DIR` (for existing projects):
 ```bash
 export AUTH_TOKEN="your-secret"
 export GOOSE_SCOPE_DIR="/abs/path/to/your/project"
-export GOOSE_BINARY="/usr/local/bin/goose"   # optional
 export MAX_CONCURRENCY="1"
 export LOG_MAX_BYTES="8000000"
 ```

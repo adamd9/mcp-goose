@@ -21,11 +21,20 @@ function slugify(name) {
     .replace(/^_+|_+$/g, '') || 'app';
 }
 
-// Default scope dir: projects/<slug> inside this repo
+// Determine base projects directory and scope directory
 const userProvidedScopeDir = !!process.env.GOOSE_SCOPE_DIR;
 const userProvidedProjectName = !!process.env.PROJECT_NAME;
 const projectName = process.env.PROJECT_NAME || 'app';
-const defaultScopeDir = path.resolve(process.cwd(), 'projects', slugify(projectName));
+
+// Base projects directory: configurable via GOOSE_PROJECTS_DIR, defaults to ./projects
+const projectsBaseDir = process.env.GOOSE_PROJECTS_DIR 
+  ? path.resolve(process.env.GOOSE_PROJECTS_DIR)
+  : path.resolve(process.cwd(), 'projects');
+
+// Scope dir resolution priority:
+// 1. GOOSE_SCOPE_DIR (direct path to a single project)
+// 2. projectsBaseDir/<PROJECT_NAME> (managed project under base dir)
+const defaultScopeDir = path.join(projectsBaseDir, slugify(projectName));
 
 export const config = {
   port: parseInt(process.env.PORT || '3003', 10),

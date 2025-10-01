@@ -1,0 +1,5 @@
+node_modules
+.git
+.goose-env.sh
+*.log
+.DS_Store
