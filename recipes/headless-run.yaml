@@ -10,9 +10,9 @@ prompt: |
 
   Operational requirements (perform automatically unless unsafe):
   - If the current directory is not a git repository, initialize one (git init).
-  - Create and switch to a new feature branch uniquely named for this run (e.g., 'task_<simple-description>'). Description should be 5 words max.
+  - Create and switch to a new feature branch uniquely named for this run (e.g., 'task_<simple-description>'). Description should be 5 words max. This new branch will be based on the currently checked-out branch.
   - Be sure to review and understand the current pages and file structure before making any changes.
-  - Make all code changes on that branch.
+  - Make all code changes on that new branch.
   - At the end of the run, add all relevant files and commit with a concise message summarizing changes.
   - Do not push to any remote.
   - If actions would be destructive, explain and skip those actions.

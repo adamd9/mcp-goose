@@ -12,6 +12,7 @@ import { config, validateConfig } from './config.js';
 import { startJob, jobStatus, streamLogs, getOutput, stopJob, getRunningJobId } from './jobs.js';
 import fs from 'node:fs';
 import { publishCurrentBranch, initGitWatcher, resolvePreviewRoot } from './publish.js';
+import { buildPreviewUI } from './preview-ui.js';
 
 dotenv.config();
 
@@ -481,6 +482,78 @@ app.post('/mcp', async (req, res) => {
   }
 });
 
+// API endpoint for running Goose tasks from the UI
+app.post('/api/run', express.json(), async (req, res) => {
+  const { text, branch } = req.body;
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    return res.status(400).json({ error: 'text is required' });
+  }
+
+  // Enforce single concurrency before any operations
+  if (getRunningJobId()) {
+    return res.status(409).json({ error: 'A task is already running. Please wait for it to complete.' });
+  }
+
+  try {
+    // If a branch is specified, check it out first
+    if (branch && branch !== 'main') {
+      const { execFileSync } = require('node:child_process');
+      try {
+        // Check if branch exists
+        execFileSync('git', ['rev-parse', '--verify', branch], { cwd: config.scopeDir, stdio: 'pipe' });
+        // Checkout the branch
+        execFileSync('git', ['checkout', branch], { cwd: config.scopeDir, stdio: 'pipe' });
+        console.log(`[api/run] Checked out branch '${branch}' before running task`);
+        // Small buffer to ensure git operations complete
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (e) {
+        return res.status(400).json({ error: `Branch '${branch}' does not exist or cannot be checked out` });
+      }
+    }
+    // Create a runtime recipe (outside of scopeDir) that embeds the instruction
+    const runtimeDir = path.join(os.homedir(), '.cache', 'mcp-goose', 'runtime-recipes');
+    try { fs.mkdirSync(runtimeDir, { recursive: true }); } catch {}
+    const recipePath = path.join(runtimeDir, `run-${Date.now()}.yaml`);
+    const templatePath = path.resolve(process.cwd(), 'recipes', 'headless-run.yaml');
+    let recipeYaml;
+    try {
+      if (fs.existsSync(templatePath)) {
+        const tpl = fs.readFileSync(templatePath, 'utf8');
+        recipeYaml = tpl.replace('<<<INSTRUCTION>>>', text);
+      } else {
+        // Fallback: synthesize a minimal recipe if template missing
+        const prompt = `You are Goose running in headless mode. Follow the user instruction faithfully.\\n\\nUser instruction:\\n${text}\\n\\nOperational requirements (perform automatically unless unsafe):\\n- If the current directory is not a git repository, initialize one (git init).\\n- Create and switch to a new feature branch uniquely named for this run (e.g., 'feat/mcp-run-<timestamp>').\\n- Make all code changes on that branch.\\n- At the end of the run, add all relevant files and commit with a concise message summarizing changes.\\n- Do not push to any remote.\\n- If actions would be destructive, explain and skip those actions.\\n`;
+        recipeYaml = `title: MCP Headless Run\\ndescription: Headless run with git init/branch/commit workflow\\nprompt: |\\n  ${prompt.split('\\n').join('\\n  ')}\\n`;
+      }
+    } catch (e) {
+      // Fallback recipe
+      const prompt = `You are Goose running in headless mode. Follow the user instruction faithfully.\\n\\nUser instruction:\\n${text}\\n\\nOperational requirements (perform automatically unless unsafe):\\n- If the current directory is not a git repository, initialize one (git init).\\n- Create and switch to a new feature branch uniquely named for this run (e.g., 'feat/mcp-run-<timestamp>').\\n- Make all code changes on that branch.\\n- At the end of the run, add all relevant files and commit with a concise message summarizing changes.\\n- Do not push to any remote.\\n- If actions would be destructive, explain and skip those actions.\\n`;
+      recipeYaml = `title: MCP Headless Run\\ndescription: Headless run with git init/branch/commit workflow\\nprompt: |\\n  ${prompt.split('\\n').join('\\n  ')}\\n`;
+    }
+    fs.writeFileSync(recipePath, recipeYaml, 'utf8');
+
+    // Build final args: always headless recipe with developer builtin
+    const finalArgs = sanitizeArgs(['--no-session', '--with-builtin', 'developer', '--recipe', recipePath]);
+
+    // Small buffer before starting job to ensure file operations complete
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    const { jobId, pid, startedAt } = startJob({
+      command: 'run',
+      args: finalArgs,
+      env: {},
+      cwd: config.scopeDir,
+      goosePath: config.gooseBinary,
+      logMaxBytes: config.logMaxBytes,
+      echoToConsole: config.echoJobLogs
+    });
+
+    res.json({ jobId, pid, startedAt });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to start job' });
+  }
+});
+
 // SSE event stream for live-reload on publish
 const sseClients = new Set();
 app.get('/events', (req, res) => {
@@ -508,13 +581,23 @@ const PREVIEW_ROOT = resolvePreviewRoot();
 function listPreviewBranches() {
   const out = [];
   // main branch entry
-  out.push({ name: 'main', url: '/' });
+  try {
+    const mainStat = fs.statSync(path.join(PREVIEW_ROOT, 'index.html'));
+    out.push({ name: 'main', url: '/', mtime: mainStat.mtimeMs });
+  } catch (_) {
+    out.push({ name: 'main', url: '/', mtime: 0 });
+  }
   try {
     const dir = path.join(PREVIEW_ROOT, '.preview');
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const ent of entries) {
       if (ent.isDirectory()) {
-        out.push({ name: ent.name, url: `/.preview/${ent.name}/` });
+        try {
+          const stat = fs.statSync(path.join(dir, ent.name));
+          out.push({ name: ent.name, url: `/.preview/${ent.name}/`, mtime: stat.mtimeMs });
+        } catch (_) {
+          out.push({ name: ent.name, url: `/.preview/${ent.name}/`, mtime: 0 });
+        }
       }
     }
   } catch (_) {}
@@ -530,41 +613,11 @@ function needsInjection(filePath) {
 
 function buildInjected(html, currentPath = '/') {
   const branches = listPreviewBranches();
-  const nav = `
-  <style>
-    ._goose_preview_nav{position:fixed;right:16px;bottom:16px;z-index:99999;font:14px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-    ._goose_preview_nav .box{background:#111d28;color:#dfe9f1;border:1px solid #2a3b4a;border-radius:10px;padding:10px 12px;box-shadow:0 6px 18px rgba(0,0,0,0.25)}
-    ._goose_preview_nav .title{font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase;opacity:.8;margin-bottom:6px}
-    ._goose_preview_nav a{display:block;color:#bde0fe;text-decoration:none;padding:6px 4px;border-radius:6px}
-    ._goose_preview_nav a:hover{background:#18324a}
-    ._goose_preview_nav .active{color:#fff;background:#29557a}
-    ._goose_preview_nav .hint{margin-top:8px;font-size:12px;color:#e8f7ff;opacity:0;transition:opacity .25s}
-  </style>
-  <div class="_goose_preview_nav"><div class="box">
-    <div class="title">Preview Branches</div>
-    ${branches.map(b => `<a href="${b.url}" class="${currentPath.startsWith(b.url) ? 'active' : ''}">${b.name}</a>`).join('')}
-    <div class="hint" id="_goose_preview_hint"></div>
-  </div></div>
-  <script>
-    (function(){
-      function showHint(msg){
-        var el=document.getElementById('_goose_preview_hint');
-        if(!el) return; el.textContent=msg; el.style.opacity='1';
-        try{clearTimeout(window._goose_hint_t);}catch(_){}}
-      try{
-        var es=new EventSource('/events');
-        es.addEventListener('reload',function(ev){
-          var data={}; try{ data = JSON.parse(ev.data||'{}'); }catch(_){ }
-          showHint('Updated ' + (data.branch || 'site') + ' — reloading…');
-          setTimeout(function(){ location.reload(); }, 650);
-        });
-      }catch(_){ }
-    })();
-  </script>`;
+  const ui = buildPreviewUI(branches, currentPath);
   if (html.includes('</body>')) {
-    return html.replace('</body>', nav + '\n</body>');
+    return html.replace('</body>', ui + '\n</body>');
   }
-  return html + nav;
+  return html + ui;
 }
 
 function tryServeInjected(baseDir) {
