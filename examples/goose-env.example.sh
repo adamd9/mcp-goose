@@ -25,9 +25,10 @@ export LOG_MAX_BYTES="8000000"
 
 # --- Provider configuration (example: OpenAI) ---
 # These map to Goose's environment variable schema.
+export GOOSE_DISABLE_KEYRING="1"
 export GOOSE_PROVIDER__TYPE="openai"
 export GOOSE_PROVIDER__HOST="https://api.openai.com/v1"
-export GOOSE_PROVIDER__API_KEY="your-openai-api-key"
+export OPENAI_API_KEY="your-openai-api-key"
 
 # --- General Goose headless tuning (optional) ---
 export GOOSE_MODE="auto"
