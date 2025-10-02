@@ -467,6 +467,53 @@ server.registerTool(
   }
 );
 
+// Tool: list_branches
+server.registerTool(
+  'list_branches',
+  {
+    title: 'List Branches',
+    description: 'List all git branches in the project with current branch indicated',
+    inputSchema: {}
+  },
+  async () => {
+    const { execFileSync } = await import('node:child_process');
+    try {
+      // Get current branch
+      const currentResult = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { 
+        cwd: config.scopeDir, 
+        encoding: 'utf8' 
+      });
+      const currentBranch = currentResult.trim();
+      
+      // Get all branches with last commit info
+      const branchesResult = execFileSync('git', ['branch', '-v', '--format=%(refname:short)|%(committerdate:iso8601)|%(subject)'], { 
+        cwd: config.scopeDir, 
+        encoding: 'utf8' 
+      });
+      
+      const branches = branchesResult.trim().split('\n').map(line => {
+        const [name, date, ...subjectParts] = line.split('|');
+        return {
+          name: name.trim(),
+          current: name.trim() === currentBranch,
+          lastCommitDate: date?.trim() || '',
+          lastCommitSubject: subjectParts.join('|').trim()
+        };
+      }).filter(b => b.name);
+      
+      return { content: [{ type: 'text', text: JSON.stringify({ 
+        currentBranch,
+        branches,
+        total: branches.length
+      }, null, 2) }] };
+    } catch (error) {
+      const errMsg = `Failed to list branches: ${error.message}`;
+      console.error(`[list_branches] ${errMsg}`);
+      throw new Error(errMsg);
+    }
+  }
+);
+
 // Tool: promote_branch_to_main
 server.registerTool(
   'promote_branch_to_main',
@@ -480,23 +527,35 @@ server.registerTool(
   async ({ branch }) => {
     const { execFileSync } = await import('node:child_process');
     try {
+      console.log(`[promote_branch_to_main] Verifying branch '${branch}' exists...`);
       // Verify branch exists
       execFileSync('git', ['rev-parse', '--verify', branch], { cwd: config.scopeDir, stdio: 'pipe' });
       
+      console.log(`[promote_branch_to_main] git checkout main`);
       // Checkout main
       execFileSync('git', ['checkout', 'main'], { cwd: config.scopeDir, stdio: 'pipe' });
       
+      console.log(`[promote_branch_to_main] git reset --hard ${branch}`);
       // Hard reset main to match the feature branch
       execFileSync('git', ['reset', '--hard', branch], { cwd: config.scopeDir, stdio: 'pipe' });
       
       const message = `Successfully promoted '${branch}' to main. Main now matches ${branch}.`;
       console.log(`[promote_branch_to_main] ${message}`);
       
+      // Trigger republish of main branch
+      console.log(`[promote_branch_to_main] Triggering republish of main...`);
+      try {
+        const result = await publishCurrentBranch(config.scopeDir);
+        console.log(`[promote_branch_to_main] Republished main → ${result.targetDir}`);
+      } catch (e) {
+        console.warn(`[promote_branch_to_main] Republish failed: ${e?.message || e}`);
+      }
+      
       return { content: [{ type: 'text', text: JSON.stringify({ 
         success: true, 
         message,
         branch,
-        note: 'Main branch has been updated. The feature branch still exists.'
+        note: 'Main branch has been updated and republished. The feature branch still exists.'
       }, null, 2) }] };
     } catch (error) {
       const errMsg = `Failed to promote branch '${branch}' to main: ${error.message}`;
@@ -519,14 +578,26 @@ server.registerTool(
   async ({ hard = false }) => {
     const { execFileSync } = await import('node:child_process');
     try {
+      console.log(`[undo_last_commit_on_main] git checkout main`);
       // Checkout main
       execFileSync('git', ['checkout', 'main'], { cwd: config.scopeDir, stdio: 'pipe' });
       
       if (hard) {
+        console.log(`[undo_last_commit_on_main] git reset --hard HEAD~1`);
         // Hard reset (destructive) - removes the commit entirely
         execFileSync('git', ['reset', '--hard', 'HEAD~1'], { cwd: config.scopeDir, stdio: 'pipe' });
         const message = 'Last commit on main has been removed (hard reset).';
         console.log(`[undo_last_commit_on_main] ${message}`);
+        
+        // Trigger republish of main branch
+        console.log(`[undo_last_commit_on_main] Triggering republish of main...`);
+        try {
+          const result = await publishCurrentBranch(config.scopeDir);
+          console.log(`[undo_last_commit_on_main] Republished main → ${result.targetDir}`);
+        } catch (e) {
+          console.warn(`[undo_last_commit_on_main] Republish failed: ${e?.message || e}`);
+        }
+        
         return { content: [{ type: 'text', text: JSON.stringify({ 
           success: true, 
           message,
@@ -534,10 +605,21 @@ server.registerTool(
           warning: 'This is destructive and cannot be undone unless you have the commit hash.'
         }, null, 2) }] };
       } else {
+        console.log(`[undo_last_commit_on_main] git revert --no-edit HEAD`);
         // Safe revert - creates a new commit that undoes the last one
         execFileSync('git', ['revert', '--no-edit', 'HEAD'], { cwd: config.scopeDir, stdio: 'pipe' });
         const message = 'Last commit on main has been reverted (new revert commit created).';
         console.log(`[undo_last_commit_on_main] ${message}`);
+        
+        // Trigger republish of main branch
+        console.log(`[undo_last_commit_on_main] Triggering republish of main...`);
+        try {
+          const result = await publishCurrentBranch(config.scopeDir);
+          console.log(`[undo_last_commit_on_main] Republished main → ${result.targetDir}`);
+        } catch (e) {
+          console.warn(`[undo_last_commit_on_main] Republish failed: ${e?.message || e}`);
+        }
+        
         return { content: [{ type: 'text', text: JSON.stringify({ 
           success: true, 
           message,
