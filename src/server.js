@@ -467,6 +467,92 @@ server.registerTool(
   }
 );
 
+// Tool: promote_branch_to_main
+server.registerTool(
+  'promote_branch_to_main',
+  {
+    title: 'Promote Branch to Main',
+    description: 'Replace main branch with a feature branch (hard reset main to match the feature branch)',
+    inputSchema: {
+      branch: z.string().min(1).describe('Feature branch name to promote to main')
+    }
+  },
+  async ({ branch }) => {
+    const { execFileSync } = await import('node:child_process');
+    try {
+      // Verify branch exists
+      execFileSync('git', ['rev-parse', '--verify', branch], { cwd: config.scopeDir, stdio: 'pipe' });
+      
+      // Checkout main
+      execFileSync('git', ['checkout', 'main'], { cwd: config.scopeDir, stdio: 'pipe' });
+      
+      // Hard reset main to match the feature branch
+      execFileSync('git', ['reset', '--hard', branch], { cwd: config.scopeDir, stdio: 'pipe' });
+      
+      const message = `Successfully promoted '${branch}' to main. Main now matches ${branch}.`;
+      console.log(`[promote_branch_to_main] ${message}`);
+      
+      return { content: [{ type: 'text', text: JSON.stringify({ 
+        success: true, 
+        message,
+        branch,
+        note: 'Main branch has been updated. The feature branch still exists.'
+      }, null, 2) }] };
+    } catch (error) {
+      const errMsg = `Failed to promote branch '${branch}' to main: ${error.message}`;
+      console.error(`[promote_branch_to_main] ${errMsg}`);
+      throw new Error(errMsg);
+    }
+  }
+);
+
+// Tool: undo_last_commit_on_main
+server.registerTool(
+  'undo_last_commit_on_main',
+  {
+    title: 'Undo Last Commit on Main',
+    description: 'Revert the last commit on the main branch (creates a new revert commit)',
+    inputSchema: {
+      hard: z.boolean().optional().describe('If true, uses reset --hard (destructive). If false (default), uses revert (safe)')
+    }
+  },
+  async ({ hard = false }) => {
+    const { execFileSync } = await import('node:child_process');
+    try {
+      // Checkout main
+      execFileSync('git', ['checkout', 'main'], { cwd: config.scopeDir, stdio: 'pipe' });
+      
+      if (hard) {
+        // Hard reset (destructive) - removes the commit entirely
+        execFileSync('git', ['reset', '--hard', 'HEAD~1'], { cwd: config.scopeDir, stdio: 'pipe' });
+        const message = 'Last commit on main has been removed (hard reset).';
+        console.log(`[undo_last_commit_on_main] ${message}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ 
+          success: true, 
+          message,
+          method: 'hard reset',
+          warning: 'This is destructive and cannot be undone unless you have the commit hash.'
+        }, null, 2) }] };
+      } else {
+        // Safe revert - creates a new commit that undoes the last one
+        execFileSync('git', ['revert', '--no-edit', 'HEAD'], { cwd: config.scopeDir, stdio: 'pipe' });
+        const message = 'Last commit on main has been reverted (new revert commit created).';
+        console.log(`[undo_last_commit_on_main] ${message}`);
+        return { content: [{ type: 'text', text: JSON.stringify({ 
+          success: true, 
+          message,
+          method: 'revert',
+          note: 'A new commit has been created that undoes the changes. History is preserved.'
+        }, null, 2) }] };
+      }
+    } catch (error) {
+      const errMsg = `Failed to undo last commit on main: ${error.message}`;
+      console.error(`[undo_last_commit_on_main] ${errMsg}`);
+      throw new Error(errMsg);
+    }
+  }
+);
+
 // MCP endpoint with auth
 app.post('/mcp', async (req, res) => {
   if (!checkAuth(req, res)) return;

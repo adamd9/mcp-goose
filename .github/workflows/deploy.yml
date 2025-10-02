@@ -1,0 +1,25 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  trigger-deployment:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Set domain
+        id: set-domain
+        run: |
+          echo "DOMAIN=www.drop37.com" >> $GITHUB_ENV
+          
+      - name: Trigger Docker Server Deployment
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.DOCKER_SERVER_ACTIONS_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/adamd9/docker-server-dev/dispatches \
+            -d '{"event_type": "deploy-service", "client_payload": {"domain": "${{ env.DOMAIN }}", "action": "down-up"}}'
