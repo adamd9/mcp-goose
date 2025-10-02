@@ -23,10 +23,12 @@ function branchSlug(name) {
   return name.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
-async function rmDirContents(dir) {
+async function rmDirContents(dir, skipNames = []) {
   try {
     const entries = await fsp.readdir(dir, { withFileTypes: true });
     await Promise.all(entries.map(async (ent) => {
+      // Skip directories/files that should be preserved
+      if (skipNames.includes(ent.name)) return;
       const p = path.join(dir, ent.name);
       await fsp.rm(p, { recursive: true, force: true });
     }));
@@ -196,7 +198,9 @@ export async function publishCurrentBranch(scopeDir) {
     throw new Error('Resolved targetDir is outside of previewRoot');
   }
 
-  await rmDirContents(targetDir);
+  // When publishing main, preserve the .preview directory
+  const skipNames = (branch === MAIN_BRANCH) ? [PREVIEW_PREFIX] : [];
+  await rmDirContents(targetDir, skipNames);
   await copyDir(scopeDir, targetDir);
 
   const url = branch === MAIN_BRANCH
@@ -204,6 +208,61 @@ export async function publishCurrentBranch(scopeDir) {
     : `http://localhost:${process.env.PORT || 3003}/${PREVIEW_PREFIX}/${branchSlug(branch)}/`;
 
   return { branch, targetDir, url };
+}
+
+async function getAllBranches(scopeDir) {
+  const { error, stdout } = await execFileAsync('git', ['branch', '--format=%(refname:short)'], { cwd: scopeDir });
+  if (error) return [];
+  return stdout.trim().split('\n').filter(b => b.trim());
+}
+
+export async function publishAllBranches(scopeDir) {
+  await ensureScopeReady(scopeDir);
+  const branches = await getAllBranches(scopeDir);
+  const results = [];
+  const currentBranch = await detectBranch(scopeDir);
+  
+  console.log(`[publishAllBranches] Found ${branches.length} branches: ${branches.join(', ')}`);
+  console.log(`[publishAllBranches] Current branch: ${currentBranch}`);
+  
+  for (const branch of branches) {
+    try {
+      console.log(`[publishAllBranches] Checking out '${branch}'...`);
+      // Checkout the branch
+      const { error: checkoutError, stderr } = await execFileAsync('git', ['checkout', branch], { cwd: scopeDir });
+      if (checkoutError) {
+        console.warn(`[publishAllBranches] Failed to checkout '${branch}': ${stderr || checkoutError.message || checkoutError}`);
+        continue;
+      }
+      
+      // Publish it
+      console.log(`[publishAllBranches] Publishing '${branch}'...`);
+      const result = await publishCurrentBranch(scopeDir);
+      results.push(result);
+      console.log(`[publishAllBranches] ✓ Published '${branch}' → ${result.targetDir}`);
+      
+      // Verify the directory exists
+      try {
+        const stat = await fsp.stat(result.targetDir);
+        console.log(`[publishAllBranches]   Directory exists: ${stat.isDirectory()}`);
+      } catch (e) {
+        console.warn(`[publishAllBranches]   WARNING: Directory does not exist after publish!`);
+      }
+    } catch (e) {
+      console.warn(`[publishAllBranches] Failed to publish '${branch}': ${e?.message || e}`);
+      console.warn(e);
+    }
+  }
+  
+  // Return to original branch
+  console.log(`[publishAllBranches] Returning to '${currentBranch}'...`);
+  try {
+    await execFileAsync('git', ['checkout', currentBranch], { cwd: scopeDir });
+  } catch (e) {
+    console.warn(`[publishAllBranches] Failed to return to '${currentBranch}': ${e?.message || e}`);
+  }
+  
+  return results;
 }
 
 export function initGitWatcher(scopeDir, onChange) {

@@ -11,7 +11,7 @@ import os from 'node:os';
 import { config, validateConfig } from './config.js';
 import { startJob, jobStatus, streamLogs, getOutput, stopJob, getRunningJobId } from './jobs.js';
 import fs from 'node:fs';
-import { publishCurrentBranch, initGitWatcher, resolvePreviewRoot } from './publish.js';
+import { publishCurrentBranch, publishAllBranches, initGitWatcher, resolvePreviewRoot } from './publish.js';
 import { buildPreviewUI } from './preview-ui.js';
 
 dotenv.config();
@@ -130,6 +130,26 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '2mb' }));
+
+// Request logging middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const logLevel = res.statusCode >= 400 ? 'warn' : 'log';
+    console[logLevel](`[${req.method}] ${req.path} ${res.statusCode} - ${duration}ms`);
+  });
+  next();
+});
+
+// Error handling for JSON parsing
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    console.error('[express] JSON parse error:', err.message);
+    return res.status(400).json({ error: 'Invalid JSON in request body' });
+  }
+  next(err);
+});
 
 // Simple status route (not MCP)
 app.get('/status', (req, res) => {
@@ -652,20 +672,24 @@ app.post('/mcp', async (req, res) => {
 
 // API endpoint for running Goose tasks from the UI
 app.post('/api/run', express.json(), async (req, res) => {
+  console.log(`[api/run] Request received: branch=${req.body.branch || 'main'}, text=${req.body.text?.substring(0, 50)}...`);
+  
   const { text, branch } = req.body;
   if (!text || typeof text !== 'string' || !text.trim()) {
+    console.warn('[api/run] Bad request: text is required');
     return res.status(400).json({ error: 'text is required' });
   }
 
   // Enforce single concurrency before any operations
   if (getRunningJobId()) {
+    console.warn('[api/run] Rejected: job already running');
     return res.status(409).json({ error: 'A task is already running. Please wait for it to complete.' });
   }
 
   try {
     // If a branch is specified, check it out first
     if (branch && branch !== 'main') {
-      const { execFileSync } = require('node:child_process');
+      const { execFileSync } = await import('node:child_process');
       try {
         // Check if branch exists
         execFileSync('git', ['rev-parse', '--verify', branch], { cwd: config.scopeDir, stdio: 'pipe' });
@@ -716,8 +740,11 @@ app.post('/api/run', express.json(), async (req, res) => {
       echoToConsole: config.echoJobLogs
     });
 
+    console.log(`[api/run] Job started successfully: jobId=${jobId}, pid=${pid}`);
     res.json({ jobId, pid, startedAt });
   } catch (error) {
+    console.error(`[api/run] Error:`, error);
+    console.error(`[api/run] Stack:`, error.stack);
     res.status(500).json({ error: error.message || 'Failed to start job' });
   }
 });
@@ -826,18 +853,34 @@ app.use('/', tryServeInjected(PREVIEW_ROOT));
 app.use('/.preview', express.static(path.join(PREVIEW_ROOT, '.preview')));
 app.use('/', express.static(PREVIEW_ROOT));
 
+// Global error handler (must be last)
+app.use((err, req, res, next) => {
+  console.error('[express] Unhandled error:', err);
+  console.error('[express] Stack:', err.stack);
+  if (!res.headersSent) {
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: err.message,
+      ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    });
+  }
+});
+
 // Start HTTP server
 const PORT = config.port || 3003;
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[mcp-goose] listening on http://0.0.0.0:${PORT}`);
   console.log(`[mcp-goose] MCP endpoint: POST http://localhost:${PORT}/mcp`);
 
-  // Initial publish of current branch to local static root
+  // Initial publish of all branches to local static root
   try {
-    const result = await publishCurrentBranch(config.scopeDir);
-    console.log(`[preview] published branch '${result.branch}' → ${result.targetDir}`);
-    console.log(`[preview] URL: ${result.url}`);
-    broadcastReload({ branch: result.branch });
+    console.log('[preview] Publishing all branches...');
+    const results = await publishAllBranches(config.scopeDir);
+    console.log(`[preview] Published ${results.length} branch(es)`);
+    for (const result of results) {
+      console.log(`[preview]   - ${result.branch} → ${result.url}`);
+    }
+    broadcastReload({ branch: 'all' });
   } catch (e) {
     console.warn(`[preview] initial publish failed: ${e?.message || e}`);
   }
